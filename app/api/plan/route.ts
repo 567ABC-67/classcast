@@ -45,7 +45,7 @@ export type PlannedClass = {
   note?: string;
 };
 
-export type PlanResponse = { home: LatLon; classes: PlannedClass[]; brief: string | null; aiUsed: boolean; aiError?: string };
+export type PlanResponse = { home: LatLon; classes: PlannedClass[]; brief: string | null; aiUsed: boolean; aiProvider?: "gemini" | "claude"; aiError?: string };
 
 const fail = (msg: string, status = 400) => NextResponse.json({ error: msg }, { status });
 
@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
   );
   if (ai.ok) for (const c of classes) if (ai.bring[c.id]?.length) c.bring = ai.bring[c.id];
 
-  return NextResponse.json({ home, classes, brief: ai.ok ? ai.brief : null, aiUsed: ai.ok, aiError: ai.ok ? undefined : ai.reason } satisfies PlanResponse, {
+  return NextResponse.json({ home, classes, brief: ai.ok ? ai.brief : null, aiUsed: ai.ok, aiProvider: ai.ok ? ai.provider : undefined, aiError: ai.ok ? undefined : ai.reason } satisfies PlanResponse, {
     headers: { "cache-control": "no-store" },
   });
 }
