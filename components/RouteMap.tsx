@@ -14,7 +14,8 @@ export default function RouteMap({ plan }: { plan: PlanResponse }) {
     <MapContainer bounds={pts} boundsOptions={{ padding: [30, 30], maxZoom: 17 }} className="h-72 w-full rounded-xl" scrollWheelZoom={false}>
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        referrerPolicy="strict-origin-when-cross-origin"
       />
       <CircleMarker center={pts[0]} radius={8} pathOptions={{ color: "#0f172a", fillOpacity: 0.9 }}>
         <Tooltip>Home</Tooltip>
