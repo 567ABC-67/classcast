@@ -260,7 +260,7 @@ export default function Page() {
                   </p>
                 )}
                 {plan.brief && <p className="mt-1 text-sm opacity-90">{plan.brief}</p>}
-                {!plan.aiUsed && <p className="mt-1 text-xs opacity-70">AI brief unavailable; showing the basics.</p>}
+                {!plan.aiUsed && <p className="mt-1 text-xs opacity-80">AI brief unavailable: {plan.aiError ?? "unknown error"} Showing the basics.</p>}
               </div>
               <RouteMap plan={plan} />
               {plan.classes.map((c, i) => {
