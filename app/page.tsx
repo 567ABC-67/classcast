@@ -61,6 +61,8 @@ function dayChips(inBrowser: boolean) {
 
 const subscribeNoop = () => () => {};
 
+const MAX_CALENDARS = 5;
+
 const dayHeading = (iso: string) => new Date(iso).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
 
 const input =
@@ -69,9 +71,8 @@ const pill = (on: boolean) =>
   `rounded-full px-3 py-1 text-sm ${on ? "bg-blue-600 text-white" : "bg-slate-200 dark:bg-slate-800"}`;
 
 export default function Page() {
-  const [icalUrl, setIcalUrl] = useState("");
-  const [icsText, setIcsText] = useState<string | null>(null);
-  const [fileName, setFileName] = useState("");
+  const [links, setLinks] = useState<string[]>([""]);
+  const [files, setFiles] = useState<{ name: string; text: string }[]>([]);
   const [gps, setGps] = useState<Home>(null);
   const [address, setAddress] = useState("");
   const [locating, setLocating] = useState(false);
@@ -102,18 +103,26 @@ export default function Page() {
     );
   }
 
-  async function onFile(f: File | undefined) {
-    if (!f) return;
-    if (f.size > 2 * 1024 * 1024) return setError("That file is over 2 MB.");
-    setIcsText(await f.text());
-    setFileName(f.name);
-    setIcalUrl("");
+  const filledLinks = links.map((l) => l.trim()).filter(Boolean);
+  const calendarCount = filledLinks.length + files.length;
+
+  async function onFiles(list: FileList | null) {
+    if (!list) return;
+    const added: { name: string; text: string }[] = [];
+    for (const f of Array.from(list)) {
+      if (f.size > 2 * 1024 * 1024) return setError(`${f.name} is over 2 MB.`);
+      added.push({ name: f.name, text: await f.text() });
+    }
+    if (calendarCount + added.length > MAX_CALENDARS) return setError(`Up to ${MAX_CALENDARS} calendars at a time.`);
+    setFiles((cur) => [...cur, ...added]);
+    setError("");
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!icalUrl && !icsText) return setError("Paste your calendar link or upload a .ics file.");
+    if (calendarCount === 0) return setError("Paste a calendar link or upload a .ics file.");
+    if (calendarCount > MAX_CALENDARS) return setError(`Up to ${MAX_CALENDARS} calendars at a time.`);
     if (!gps && address.trim().length < 3) return setError("Use your location or type a home address.");
 
     setLoading(true);
@@ -122,7 +131,10 @@ export default function Page() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          ...(icsText ? { icsText } : { icalUrl }),
+          calendars: [
+            ...filledLinks.map((url, i) => ({ label: `Calendar ${i + 1}`, url })),
+            ...files.map((f) => ({ label: f.name.replace(/\.ics$/i, "").slice(0, 40), ics: f.text })),
+          ],
           home: gps ?? { address: address.trim() },
           mode,
           tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -153,31 +165,71 @@ export default function Page() {
 
       <form onSubmit={submit} className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
         <div className="space-y-2">
-          <label className="block text-sm font-medium" htmlFor="ical">
-            Class calendar (iCal link)
+          <label className="block text-sm font-medium" htmlFor="ical-0">
+            Class calendars (iCal links)
           </label>
-          <input
-            id="ical"
-            className={input}
-            type="url"
-            inputMode="url"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="https://… or webcal://…"
-            value={icalUrl}
-            onChange={(e) => {
-              setIcalUrl(e.target.value);
-              setIcsText(null);
-              setFileName("");
-            }}
-          />
+          {links.map((link, i) => (
+            <div key={i} className="flex gap-2">
+              <input
+                id={`ical-${i}`}
+                className={input}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label={`Calendar link ${i + 1}`}
+                placeholder="https://… or webcal://…"
+                value={link}
+                onChange={(e) => setLinks((cur) => cur.map((l, j) => (j === i ? e.target.value : l)))}
+              />
+              {links.length > 1 && (
+                <button
+                  type="button"
+                  aria-label={`Remove calendar link ${i + 1}`}
+                  className="rounded-lg px-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  onClick={() => setLinks((cur) => cur.filter((_, j) => j !== i))}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+          {files.length > 0 && (
+            <ul className="flex flex-wrap gap-2">
+              {files.map((f, i) => (
+                <li key={`${f.name}-${i}`} className="flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs dark:bg-slate-800">
+                  📄 {f.name}
+                  <button type="button" aria-label={`Remove ${f.name}`} className="text-slate-500" onClick={() => setFiles((cur) => cur.filter((_, j) => j !== i))}>
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="text-xs text-slate-500">
-            or{" "}
-            <label className="cursor-pointer text-blue-600 underline">
-              upload a .ics file
-              <input type="file" accept=".ics,text/calendar" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
-            </label>
-            {fileName && <span> · {fileName}</span>}. Your link is only used for this request and never saved.
+            {links.length + files.length < MAX_CALENDARS && (
+              <>
+                <button type="button" className="text-blue-600 underline" onClick={() => setLinks((cur) => [...cur, ""])}>
+                  + add another link
+                </button>
+                {" or "}
+                <label className="cursor-pointer text-blue-600 underline">
+                  upload .ics files
+                  <input
+                    type="file"
+                    accept=".ics,text/calendar"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      onFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {". "}
+              </>
+            )}
+            Up to {MAX_CALENDARS} calendars. Links are only used for this request and never saved.
           </p>
         </div>
 
@@ -244,6 +296,13 @@ export default function Page() {
 
       {plan && (
         <section className="mt-6 space-y-4">
+          {plan.warnings.length > 0 && (
+            <ul className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              {plan.warnings.map((w) => (
+                <li key={w}>⚠️ {w}</li>
+              ))}
+            </ul>
+          )}
           {plan.classes.length === 0 ? (
             <p className="text-center text-slate-500">No classes {labelFor(planWhen)}. Enjoy 🎉</p>
           ) : (
@@ -269,7 +328,7 @@ export default function Page() {
                 return (
                   <div key={c.id} className="space-y-4">
                     {newDay && <h2 className="pt-2 text-lg font-semibold">{dayHeading(c.start)}</h2>}
-                    <ClassCard c={c} units={units} index={i} mode={planMode} />
+                    <ClassCard c={c} units={units} index={i} mode={planMode} showSource={new Set(plan.classes.map((x) => x.source)).size > 1} />
                   </div>
                 );
               })}

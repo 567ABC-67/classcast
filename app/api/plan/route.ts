@@ -2,12 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { aiPlan } from "@/lib/ai";
 import { ruleBring } from "@/lib/bring";
+import { loadCalendars, MAX_CALENDARS, type CalendarSource } from "@/lib/calendars";
 import { geocodeAddress, geocodeLocation, isVirtual, type LatLon } from "@/lib/geocode";
-import { eventsInWindow } from "@/lib/ical";
 import { planLeave, startsFromPrevious } from "@/lib/leaveTime";
 import { rateLimited } from "@/lib/rateLimit";
 import { getRoute, type Route } from "@/lib/route";
-import { assertLooksLikeIcs, fetchCalendar, MAX_BYTES, UnsafeUrlError } from "@/lib/safeFetch";
+import { MAX_BYTES } from "@/lib/safeFetch";
 import { getForecasts, type Weather } from "@/lib/weather";
 
 export const runtime = "nodejs";
@@ -15,6 +15,16 @@ export const maxDuration = 60;
 
 const Body = z
   .object({
+    calendars: z
+      .array(
+        z.union([
+          z.object({ label: z.string().max(40).optional(), url: z.string().min(1).max(2000) }),
+          z.object({ label: z.string().max(40).optional(), ics: z.string().min(1).max(MAX_BYTES) }),
+        ]),
+      )
+      .max(MAX_CALENDARS, `Up to ${MAX_CALENDARS} calendars at a time.`)
+      .optional(),
+    // single-calendar form, kept for older clients
     icalUrl: z.string().max(2000).optional(),
     icsText: z.string().max(MAX_BYTES).optional(),
     home: z.union([
@@ -26,11 +36,17 @@ const Body = z
     to: z.iso.datetime({ offset: true }),
     tz: z.string().max(64).default("UTC"),
   })
-  .refine((b) => !!b.icalUrl !== !!b.icsText, "Give either a calendar URL or a file.");
+  .refine((b) => (b.calendars?.length ?? 0) + (b.icalUrl ? 1 : 0) + (b.icsText ? 1 : 0) > 0, "Add at least one calendar link or file.")
+  // Vercel rejects request bodies over 4.5 MB, so keep uploads comfortably under that.
+  .refine(
+    (b) => (b.calendars ?? []).reduce((n, c) => n + ("ics" in c ? c.ics.length : 0), b.icsText?.length ?? 0) <= 4 * 1024 * 1024,
+    "Uploaded files are too big together (4 MB max).",
+  );
 
 export type PlannedClass = {
   id: string;
   title: string;
+  source: string;
   location: string;
   start: string;
   end: string;
@@ -45,7 +61,7 @@ export type PlannedClass = {
   note?: string;
 };
 
-export type PlanResponse = { home: LatLon; classes: PlannedClass[]; brief: string | null; aiUsed: boolean; aiProvider?: "gemini" | "claude"; aiError?: string };
+export type PlanResponse = { home: LatLon; classes: PlannedClass[]; brief: string | null; aiUsed: boolean; aiProvider?: "gemini" | "claude"; aiError?: string; warnings: string[] };
 
 const fail = (msg: string, status = 400) => NextResponse.json({ error: msg }, { status });
 
@@ -74,21 +90,14 @@ export async function POST(req: NextRequest) {
   if (!(to > from) || to.getTime() - from.getTime() > 8 * 86_400_000) return fail("Pick a range of up to a week.");
   const tz = safeTz(b.tz);
 
-  // 1. Calendar (never logged: private iCal links work like passwords)
-  let ics: string;
-  try {
-    ics = b.icalUrl ? await fetchCalendar(b.icalUrl) : b.icsText!;
-    if (!b.icalUrl) assertLooksLikeIcs(ics);
-  } catch (e) {
-    return fail(e instanceof UnsafeUrlError ? e.message : "Couldn't load that calendar.");
-  }
+  // 1. Calendars (never logged: private iCal links work like passwords)
+  const sources: CalendarSource[] = (b.calendars ?? []).map((c, i) => ({ ...c, label: c.label?.trim() || `Calendar ${i + 1}` }));
+  if (b.icalUrl) sources.push({ label: `Calendar ${sources.length + 1}`, url: b.icalUrl });
+  if (b.icsText) sources.push({ label: `Calendar ${sources.length + 1}`, ics: b.icsText });
+  if (sources.length > MAX_CALENDARS) return fail(`Up to ${MAX_CALENDARS} calendars at a time.`);
 
-  let events;
-  try {
-    events = eventsInWindow(ics, from, to);
-  } catch {
-    return fail("Couldn't read that calendar file.");
-  }
+  const { events, warnings, loadedCount } = await loadCalendars(sources, from, to);
+  if (loadedCount === 0) return fail(warnings.join(" "));
 
   // 2. Home
   const home = "address" in b.home ? await geocodeAddress(b.home.address) : b.home;
@@ -113,6 +122,7 @@ export async function POST(req: NextRequest) {
     const pc: PlannedClass = {
       id: ev.id,
       title: ev.title,
+      source: ev.source,
       location: ev.location,
       start: ev.start,
       end: ev.end,
@@ -164,7 +174,7 @@ export async function POST(req: NextRequest) {
   );
   if (ai.ok) for (const c of classes) if (ai.bring[c.id]?.length) c.bring = ai.bring[c.id];
 
-  return NextResponse.json({ home, classes, brief: ai.ok ? ai.brief : null, aiUsed: ai.ok, aiProvider: ai.ok ? ai.provider : undefined, aiError: ai.ok ? undefined : ai.reason } satisfies PlanResponse, {
+  return NextResponse.json({ home, classes, brief: ai.ok ? ai.brief : null, aiUsed: ai.ok, aiProvider: ai.ok ? ai.provider : undefined, aiError: ai.ok ? undefined : ai.reason, warnings } satisfies PlanResponse, {
     headers: { "cache-control": "no-store" },
   });
 }
