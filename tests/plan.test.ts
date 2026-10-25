@@ -99,6 +99,45 @@ describe("POST /api/plan", () => {
     expect(plan.aiUsed).toBe(false); // no key in tests
   }, 20_000);
 
+  it("accepts several calendars and warns about a bad one", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (u: string | URL) => fakeFetch(u)));
+    const res = await POST(
+      request(
+        {
+          calendars: [
+            { label: "Classes", ics: ICS },
+            { url: "http://10.0.0.1/cal.ics" },
+          ],
+          home: { lat: 40.7934, lon: -77.86 },
+          from: "2026-10-26T04:00:00Z",
+          to: "2026-10-27T04:00:00Z",
+        },
+        "9.9.9.9",
+      ),
+    );
+    expect(res.status).toBe(200);
+    const plan = (await res.json()) as PlanResponse;
+    expect(plan.classes).toHaveLength(3);
+    expect(plan.classes[0].source).toBe("Classes");
+    expect(plan.warnings).toEqual(["Calendar 2: That address is not allowed."]);
+  }, 20_000);
+
+  it("rejects more than 5 calendars", async () => {
+    const res = await POST(
+      request(
+        {
+          calendars: Array.from({ length: 6 }, () => ({ ics: ICS })),
+          home: { lat: 40.79, lon: -77.86 },
+          from: "2026-10-26T04:00:00Z",
+          to: "2026-10-27T04:00:00Z",
+        },
+        "8.8.4.4",
+      ),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/Up to 5/);
+  });
+
   it("rejects private-network calendar URLs", async () => {
     const res = await POST(
       request(

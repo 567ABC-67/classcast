@@ -2,7 +2,7 @@
 
 When to leave, what to bring, and how to get to class. Built from your class calendar and the forecast.
 
-- Paste an iCal link (or upload a `.ics`) and share your location (or type an address)
+- Paste up to 5 iCal links and/or upload `.ics` files (merged, de-duplicated, labeled by calendar), then share your location (or type an address)
 - For each class: **leave-by time**, route + minutes, weather at that hour, and a bring list
 - Back-to-back classes are routed from the previous class, with a warning if the gap is too short
 - Gemini (or Claude) writes a short daily brief and tailors the bring list
@@ -45,7 +45,7 @@ browser ──POST /api/plan──▶ safeFetch (iCal) ─▶ parse + expand rep
 
 ## Security notes
 
-- **SSRF:** the iCal URL is user input fetched by the server. `lib/safeFetch.ts` allows only http/https/webcal on default ports, blocks private/loopback/link-local/metadata IPs, checks the IP at connect time (no DNS-rebinding gap), re-checks every redirect (max 3), and caps time (5 s) and size (2 MB).
+- **SSRF:** iCal URLs are user input fetched by the server (each one separately, max 5). `lib/safeFetch.ts` allows only http/https/webcal on default ports, blocks private/loopback/link-local/metadata IPs, checks the IP at connect time (no DNS-rebinding gap), re-checks every redirect (max 3), and caps time (5 s) and size (2 MB).
 - **Secrets:** API keys are server-only env vars. Private iCal links work like passwords, so they're never logged or stored.
 - **Prompt injection:** calendar text is untrusted. It goes to the model as JSON data with no tools, and the output is schema-validated and length-capped. Times are computed in code, not by the model.
 - **XSS:** everything is rendered as text by React; strict-ish CSP and security headers in `next.config.ts`.
@@ -54,6 +54,6 @@ browser ──POST /api/plan──▶ safeFetch (iCal) ─▶ parse + expand rep
 ## Tests
 
 ```bash
-npm test        # SSRF guard, iCal parsing, leave-by math, AI providers, full API flow (mocked services)
+npm test        # SSRF guard, iCal parsing, multi-calendar merge, leave-by math, AI providers, full API flow (mocked services)
 npm run lint && npm run typecheck
 ```

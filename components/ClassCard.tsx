@@ -30,7 +30,19 @@ function WeatherLine({ w, units }: { w: Weather; units: Units }) {
 
 const MODE_ICON = { walk: "🚶", bike: "🚲", drive: "🚗" } as const;
 
-export default function ClassCard({ c, units, index, mode }: { c: PlannedClass; units: Units; index: number; mode: keyof typeof MODE_ICON }) {
+export default function ClassCard({
+  c,
+  units,
+  index,
+  mode,
+  showSource = false,
+}: {
+  c: PlannedClass;
+  units: Units;
+  index: number;
+  mode: keyof typeof MODE_ICON;
+  showSource?: boolean;
+}) {
   return (
     <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-3">
@@ -42,6 +54,7 @@ export default function ClassCard({ c, units, index, mode }: { c: PlannedClass; 
           <p className="text-sm text-slate-500">
             {time(c.start)}–{time(c.end)} · {c.location || "no location"}
           </p>
+          {showSource && <p className="mt-0.5 text-xs text-slate-400">📅 {c.source}</p>}
         </div>
         {c.leaveBy && (
           <div className="shrink-0 text-right">
