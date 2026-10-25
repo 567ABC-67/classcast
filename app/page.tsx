@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import ClassCard, { type Units } from "@/components/ClassCard";
 import type { PlanResponse } from "@/app/api/plan/route";
 
@@ -11,14 +11,57 @@ const RouteMap = dynamic(() => import("@/components/RouteMap"), { ssr: false });
 type Mode = "walk" | "bike" | "drive";
 type Home = { lat: number; lon: number } | null;
 
-function dayRange(offset: number) {
-  const from = new Date();
-  from.setHours(0, 0, 0, 0);
-  from.setDate(from.getDate() + offset);
+// "0".."6" = days from today, "week" = next 7 days, "YYYY-MM-DD" = a picked date
+type When = string;
+
+const midnight = (offset = 0) => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + offset);
+  return d;
+};
+
+const isoDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function rangeFor(when: When) {
+  let from: Date;
+  let days = 1;
+  if (when === "week") {
+    from = midnight();
+    days = 7;
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(when)) {
+    const [y, m, d] = when.split("-").map(Number);
+    from = new Date(y, m - 1, d);
+  } else {
+    from = midnight(Number(when));
+  }
   const to = new Date(from);
-  to.setDate(to.getDate() + 1);
+  to.setDate(to.getDate() + days);
   return { from: from.toISOString(), to: to.toISOString() };
 }
+
+function labelFor(when: When) {
+  if (when === "week") return "this week";
+  if (when === "0") return "today";
+  if (when === "1") return "tomorrow";
+  const d = when.length === 10 ? new Date(when + "T00:00") : midnight(Number(when));
+  return "on " + d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+}
+
+// Weekday labels depend on the viewer's clock, so they're only built in the browser
+// (the page is prerendered at build time).
+function dayChips(inBrowser: boolean) {
+  return Array.from({ length: inBrowser ? 7 : 2 }, (_, i) => ({
+    value: String(i),
+    label:
+      i === 0 ? "Today" : i === 1 ? "Tomorrow" : `${midnight(i).toLocaleDateString([], { weekday: "short" })} ${midnight(i).getDate()}`,
+  }));
+}
+
+const subscribeNoop = () => () => {};
+
+const dayHeading = (iso: string) => new Date(iso).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
 
 const input =
   "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900";
@@ -33,12 +76,14 @@ export default function Page() {
   const [address, setAddress] = useState("");
   const [locating, setLocating] = useState(false);
   const [mode, setMode] = useState<Mode>("walk");
-  const [day, setDay] = useState(0);
+  const [when, setWhen] = useState<When>("0");
+  const inBrowser = useSyncExternalStore(subscribeNoop, () => true, () => false);
   const [units, setUnits] = useState<Units>("F");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [planMode, setPlanMode] = useState<Mode>("walk");
+  const [planWhen, setPlanWhen] = useState<When>("0");
 
   function useMyLocation() {
     if (!navigator.geolocation) return setError("Your browser can't share location. Type your address instead.");
@@ -81,13 +126,14 @@ export default function Page() {
           home: gps ?? { address: address.trim() },
           mode,
           tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          ...dayRange(day),
+          ...rangeFor(when),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Something went wrong.");
       setPlan(data);
       setPlanMode(mode);
+      setPlanWhen(when);
     } catch (err) {
       setPlan(null);
       setError((err as Error).message);
@@ -160,12 +206,26 @@ export default function Page() {
               </button>
             ))}
           </div>
-          <div className="flex gap-1" role="group" aria-label="Day">
-            {["Today", "Tomorrow"].map((d, i) => (
-              <button type="button" key={d} className={pill(day === i)} onClick={() => setDay(i)}>
-                {d}
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Day">
+            {dayChips(inBrowser).map((d) => (
+              <button type="button" key={d.value} className={pill(when === d.value)} onClick={() => setWhen(d.value)}>
+                {d.label}
               </button>
             ))}
+            <button type="button" className={pill(when === "week")} onClick={() => setWhen("week")}>
+              This week
+            </button>
+            {inBrowser && (
+              <input
+                type="date"
+                aria-label="Pick a date"
+                className={`${pill(when.length === 10)} border-0`}
+                min={isoDate(midnight())}
+                max={isoDate(midnight(15))}
+                value={when.length === 10 ? when : ""}
+                onChange={(e) => e.target.value && setWhen(e.target.value)}
+              />
+            )}
           </div>
           <div className="flex gap-1" role="group" aria-label="Units">
             {(["F", "C"] as Units[]).map((u) => (
@@ -177,7 +237,7 @@ export default function Page() {
         </div>
 
         <button disabled={loading} className="w-full rounded-lg bg-blue-600 py-2.5 font-semibold text-white disabled:opacity-60">
-          {loading ? "Planning your day…" : "Plan my day"}
+          {loading ? "Planning…" : when === "week" ? "Plan my week" : "Plan my day"}
         </button>
         {error && <p className="text-sm text-red-600">{error}</p>}
       </form>
@@ -185,22 +245,33 @@ export default function Page() {
       {plan && (
         <section className="mt-6 space-y-4">
           {plan.classes.length === 0 ? (
-            <p className="text-center text-slate-500">No classes {day === 0 ? "today" : "tomorrow"}. Enjoy 🎉</p>
+            <p className="text-center text-slate-500">No classes {labelFor(planWhen)}. Enjoy 🎉</p>
           ) : (
             <>
               <div className="rounded-xl bg-blue-600 p-4 text-white">
                 {first && (
                   <p className="text-lg font-semibold">
-                    First leave-by: {new Date(first.leaveBy!).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                    First leave-by:{" "}
+                    {new Date(first.leaveBy!).toLocaleString([], {
+                      ...(planWhen === "week" ? { weekday: "short" } : {}),
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
                   </p>
                 )}
                 {plan.brief && <p className="mt-1 text-sm opacity-90">{plan.brief}</p>}
                 {!plan.aiUsed && <p className="mt-1 text-xs opacity-70">AI brief unavailable; showing the basics.</p>}
               </div>
               <RouteMap plan={plan} />
-              {plan.classes.map((c, i) => (
-                <ClassCard key={c.id} c={c} units={units} index={i} mode={planMode} />
-              ))}
+              {plan.classes.map((c, i) => {
+                const newDay = planWhen === "week" && (i === 0 || dayHeading(c.start) !== dayHeading(plan.classes[i - 1].start));
+                return (
+                  <div key={c.id} className="space-y-4">
+                    {newDay && <h2 className="pt-2 text-lg font-semibold">{dayHeading(c.start)}</h2>}
+                    <ClassCard c={c} units={units} index={i} mode={planMode} />
+                  </div>
+                );
+              })}
             </>
           )}
         </section>
